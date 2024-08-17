@@ -1,67 +1,114 @@
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select
 import pandas as pd
-from datetime import datetime
 import requests
+from selenium.common.exceptions import TimeoutException
+import openpyxl
 
-# Configure and initialize the WebDriver
-driver = webdriver.Chrome()
+chrome_options = Options()
+chrome_options.add_argument("--incognito")
+chrome_options.add_argument("--start-maximized")
 
-# Navigate to the website and set the time frame
-url = 'https://uk.investing.com/commodities/us-sugar-no11-historical-data'
-driver.get(url)
-close_button=WebDriverWait(driver, 10).until(
-    EC.element_to_be_clickable((By.XPATH, '//*[@id=":rb:"]/form/div/button')))
-close_button.click()
-# Wait for the time frame dropdown to be clickable
-time_frame = WebDriverWait(driver, 10).until(
-    EC.element_to_be_clickable((By.ID, 'data_interval'))
-)
-Select(time_frame).select_by('Weekly')
+def scrape_data(url):
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.get(url)
+    time.sleep(10)
 
-# Wait for the page to load after changing the time frame
-WebDriverWait(driver, 10).until(
-    EC.presence_of_element_located((By.ID, 'curr_table'))
-)
+    try:
+        close_button = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, '//*[@id=":R1b6:"]/form/div/button'))
+        )
+        close_button.click()
+        print("Close Button Clicked")
+    except TimeoutException:
+        print("No close button found or unable to click it")
+    time.sleep(2)
 
-# Extract the table data
-table = driver.find_element(By.ID, 'curr_table')
-rows = table.find_elements(By.TAG_NAME, 'tr')
+    time_frame_element = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '//*[@id="__next"]/div[2]/div[2]/div[2]/div[1]/div[3]/div[2]/div[1]/div[2]'))
+    )
+    time_frame_element.click()
+    weekly_option = WebDriverWait(driver, 5).until(
+        EC.element_to_be_clickable((By.XPATH, '/html/body/div[1]/div[2]/div[2]/div[2]/div[1]/div[3]/div[2]/div[1]/div[2]/div/div[2]'))
+    )
+    weekly_option.click()
+    time.sleep(5)
+    table_data= WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "table.freeze-column-w-1.w-full.overflow-x-auto.text-xs.leading-4"))
+    )
+    
+    # Allow some time for dynamic content to load
+    time.sleep(5)
+    rows = table_data.find_elements(By.XPATH, ".//tbody/tr[contains(@class, 'historical-data-v2_price')]")
+    print(rows)
+    data = []
+    for row in rows:
+        cells = row.find_elements(By.TAG_NAME, "td")
+        if len(cells) >= 7:
+            date = cells[0].text
+            price = cells[1].text
+            change_percent = cells[6].text
+            data.append({"Date": date, "Price": price, "Change %": change_percent})
 
-data = []
-for row in rows[1:]:  # Skip the header row
-    cols = row.find_elements(By.TAG_NAME, 'td')
-    if len(cols) > 0:
-        date = cols[0].text
-        price = cols[1].text
-        data.append({'Product Date': date, 'Price': price})
+    print(data)
+    return data
 
 
-df = pd.DataFrame(data)
-df['Product Name'] = 'Sugar'  # Add the product name column
 
-# Process and clean the data
-df['Price'] = df['Price'].str.replace(',', '').astype(float)
-df['Product Date'] = pd.to_datetime(df['Product Date'])
-df.drop_duplicates(inplace=True)
-df.dropna(inplace=True)
+def create_dataframe(data):
+    df = pd.DataFrame(data)
+    df["Product Name"] = "Sugar"  # Assuming all data is for sugar
 
-# Add the "Day" column
-df['Day'] = df['Product Date'].dt.day_name()
+    # Handle duplicates and NaN values
+    df.drop_duplicates(inplace=True)
+    df.fillna(method="ffill", inplace=True)
+    print(df)
 
-# Convert USD to INR
-def usd_to_inr(usd_amount):
-    url = f"https://api.exchangerate-api.com/v4/latest/USD"
-    response = requests.get(url)
-    data = response.json()
-    inr_rate = data['rates']['INR']
-    return usd_amount * inr_rate
+    return df
 
-df['Final Price (INR)'] = df['Price'].apply(usd_to_inr)
+def add_day_column(df):
+    try:
+        df["Date"] = pd.to_datetime(df["Date"], format="%b %d, %Y")
+        df["Day"] = df["Date"].dt.day_name()
+    except ValueError as e:
+        print(f"Error converting date: {e}")
+        # Handle the error (e.g., replace with NaN, remove row, etc.)
+    return df
 
-# Write the output to an Excel file
-df = df[['Product Name', 'Price', 'Product Date', 'Day', 'Final Price (INR)']]
-df.to_excel('Output.xlsx', index=False)
+def convert_to_inr(df):
+    # url = 'https://v6.exchangerate-api.com/v6/86a8424b9225e7d5fda96501/latest/USD'
+    try:
+        url = 'https://v6.exchangerate-api.com/v6/86a8424b9225e7d5fda96501/latest/USD'
+        response = requests.get(url)
+        data = response.json()
+        inr_rate = data['conversion_rates']['INR']
+        
+        df['Price'] = df['Price'].astype(float)
+        
+        df["Final Price (INR)"] = df["Price"] * inr_rate
+    except Exception as e:
+        print(f"Error converting to INR: {e}")
+        df["Final Price (INR)"] = None
+    return df
+
+def save_to_excel(df, filename="Output.xlsx"):
+    df.to_excel(filename, index=False, engine='openpyxl')
+
+if __name__ == "__main__":
+    url = "https://uk.investing.com/commodities/us-sugar-no11-historical-data"
+    # api_key = "YOUR_API_KEY"  # Replace with your API key
+
+    try:
+        table_data = scrape_data(url)
+        df = create_dataframe(table_data)
+        df = add_day_column(df)
+        df = convert_to_inr(df)
+        save_to_excel(df)
+        print("Data extraction and conversion completed successfully!")
+    except Exception as e:
+        print("An error occurred:", e)
+        # Handle the error appropriately (e.g., log, retry, notify)
