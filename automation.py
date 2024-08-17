@@ -80,9 +80,9 @@ def add_day_column(df):
     return df
 
 def convert_to_inr(df):
-    # url = 'https://v6.exchangerate-api.com/v6/86a8424b9225e7d5fda96501/latest/USD'
+    
     try:
-        url = 'https://v6.exchangerate-api.com/v6/86a8424b9225e7d5fda96501/latest/USD'
+        url = 'https://v6.exchangerate-api.com/v6/YOUR-API_KEY/latest/USD'
         response = requests.get(url)
         data = response.json()
         inr_rate = data['conversion_rates']['INR']
@@ -100,8 +100,7 @@ def save_to_excel(df, filename="Output.xlsx"):
 
 if __name__ == "__main__":
     url = "https://uk.investing.com/commodities/us-sugar-no11-historical-data"
-    # api_key = "YOUR_API_KEY"  # Replace with your API key
-
+    
     try:
         table_data = scrape_data(url)
         df = create_dataframe(table_data)
@@ -111,4 +110,4 @@ if __name__ == "__main__":
         print("Data extraction and conversion completed successfully!")
     except Exception as e:
         print("An error occurred:", e)
-        # Handle the error appropriately (e.g., log, retry, notify)
+        
